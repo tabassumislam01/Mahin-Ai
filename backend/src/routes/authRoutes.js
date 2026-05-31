@@ -54,6 +54,25 @@ const loginSchema = z.object({
   params: z.object({}),
   query: z.object({}),
 });
+const refreshSchema = z.object({
+  body: z.object({ refreshToken: z.string().min(10) }),
+  params: z.object({}),
+  query: z.object({}),
+});
+const forgotPasswordSchema = z.object({
+  body: z.object({ email: z.string().email() }),
+  params: z.object({}),
+  query: z.object({}),
+});
+const resetPasswordSchema = z.object({
+  body: z.object({
+    email: z.string().email(),
+    token: z.string().min(10),
+    password: z.string().min(8).max(128),
+  }),
+  params: z.object({}),
+  query: z.object({}),
+});
 
 router.post('/login', validate(loginSchema), async (req, res, next) => {
   try {
@@ -79,9 +98,8 @@ router.post('/login', validate(loginSchema), async (req, res, next) => {
   }
 });
 
-router.post('/refresh', async (req, res) => {
-  const { refreshToken } = req.body || {};
-  if (!refreshToken) return res.status(400).json({ message: 'refreshToken required' });
+router.post('/refresh', validate(refreshSchema), async (req, res) => {
+  const { refreshToken } = req.validated.body;
 
   try {
     const payload = verifyRefreshToken(refreshToken);
@@ -98,8 +116,8 @@ router.post('/refresh', async (req, res) => {
   }
 });
 
-router.post('/logout', async (req, res) => {
-  const { refreshToken } = req.body || {};
+router.post('/logout', validate(refreshSchema), async (req, res) => {
+  const { refreshToken } = req.validated.body;
   if (!refreshToken) return res.status(204).send();
 
   try {
@@ -112,10 +130,9 @@ router.post('/logout', async (req, res) => {
   return res.status(204).send();
 });
 
-router.post('/forgot-password', async (req, res, next) => {
+router.post('/forgot-password', validate(forgotPasswordSchema), async (req, res, next) => {
   try {
-    const { email } = req.body || {};
-    if (!email) return res.status(400).json({ message: 'Email is required' });
+    const { email } = req.validated.body;
 
     const user = await User.findOne({ email });
     if (!user) return res.json({ message: 'If email exists, reset link sent' });
@@ -138,10 +155,9 @@ router.post('/forgot-password', async (req, res, next) => {
   }
 });
 
-router.post('/reset-password', async (req, res, next) => {
+router.post('/reset-password', validate(resetPasswordSchema), async (req, res, next) => {
   try {
-    const { email, token, password } = req.body || {};
-    if (!email || !token || !password) return res.status(400).json({ message: 'Invalid request' });
+    const { email, token, password } = req.validated.body;
 
     const user = await User.findOne({ email });
     if (!user || !user.resetPasswordTokenHash || !user.resetPasswordTokenExpiresAt) {
