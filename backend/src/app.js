@@ -1,53 +1,77 @@
-const express = require('express');
-const cors = require('cors');
-const helmet = require('helmet');
-const morgan = require('morgan');
-const rateLimit = require('express-rate-limit');
-const mongoSanitize = require('express-mongo-sanitize');
-const hpp = require('hpp');
-const healthRoutes = require('./routes/healthRoutes');
-const authRoutes = require('./routes/authRoutes');
-const chatRoutes = require('./routes/chatRoutes');
-const userRoutes = require('./routes/userRoutes');
-const adminRoutes = require('./routes/adminRoutes');
-const uploadRoutes = require('./routes/uploadRoutes');
-const { notFound, errorHandler } = require('./middleware/errorHandler');
-const env = require('./config/env');
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import mongoSanitize from 'express-mongo-sanitize';
+import hpp from 'hpp';
+import compression from 'compression';
+import cookieParser from 'cookie-parser';
+import morgan from 'morgan';
+import { errorHandler } from './middleware/errorHandler.js';
+import { logger, stream } from './utils/logger.js';
+import authRoutes from './routes/auth.js';
+import chatRoutes from './routes/chat.js';
+import userRoutes from './routes/user.js';
+import adminRoutes from './routes/admin.js';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
 
 const app = express();
 
+// Trust proxy
 app.set('trust proxy', 1);
+
+// Security middleware
 app.use(helmet());
-app.use(
-  cors({
-    origin: [env.CLIENT_URL],
-    credentials: true,
-  })
-);
-app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: true, limit: '1mb' }));
+
+// CORS
+app.use(cors({
+  origin: process.env.CORS_ORIGIN?.split(',') || ['http://localhost:3000'],
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'Authorization']
+}));
+
+// Body parser
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
+app.use(cookieParser());
+
+// Data sanitization
 app.use(mongoSanitize());
 app.use(hpp());
-app.use(morgan('combined'));
 
-app.use(
-  '/api',
-  rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 400,
-    standardHeaders: true,
-    legacyHeaders: false,
-  })
-);
+// Compression
+app.use(compression());
 
-app.use('/health', healthRoutes);
+// Logging
+app.use(morgan('combined', { stream }));
+
+// Health check
+app.get('/health', (req, res) => {
+  res.json({
+    status: 'OK',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    environment: process.env.NODE_ENV
+  });
+});
+
+// API Routes
 app.use('/api/auth', authRoutes);
 app.use('/api/chat', chatRoutes);
 app.use('/api/user', userRoutes);
 app.use('/api/admin', adminRoutes);
-app.use('/api/upload', uploadRoutes);
 
-app.use(notFound);
+// 404 handler
+app.use('*', (req, res) => {
+  res.status(404).json({
+    success: false,
+    message: 'Route not found',
+    status: 404
+  });
+});
+
+// Error handler
 app.use(errorHandler);
 
-module.exports = app;
+export default app;
