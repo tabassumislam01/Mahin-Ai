@@ -1,11 +1,12 @@
-const express = require('express');
-const bcrypt = require('bcryptjs');
-const crypto = require('crypto');
-const { z } = require('zod');
-const User = require('../models/User');
-const validate = require('../middleware/validate');
-const { signAccessToken, signRefreshToken, verifyRefreshToken } = require('../utils/tokens');
-const { sendEmail } = require('../services/emailService');
+import express from 'express';
+import bcryptjs from 'bcryptjs';
+import crypto from 'crypto';
+import { z } from 'zod';
+import User from '../models/User.js';
+import validate from '../middleware/validate.js';
+import { signAccessToken, signRefreshToken, verifyRefreshToken } from '../utils/tokens.js';
+import { sendEmail } from '../services/emailService.js';
+import { logger } from '../utils/logger.js';
 
 const router = express.Router();
 
@@ -23,28 +24,36 @@ router.post('/register', validate(registerSchema), async (req, res, next) => {
   try {
     const { name, email, password } = req.validated.body;
     const existing = await User.findOne({ email });
-    if (existing) return res.status(409).json({ message: 'Email already in use' });
+    if (existing) return res.status(409).json({ success: false, message: 'Email already in use' });
 
-    const passwordHash = await bcrypt.hash(password, 12);
-    const user = await User.create({ name, email, passwordHash });
+    const salt = await bcryptjs.genSalt(parseInt(process.env.BCRYPT_ROUNDS || 10));
+    const passwordHash = await bcryptjs.hash(password, salt);
+    
+    const user = await User.create({ 
+      name, 
+      email, 
+      password: passwordHash 
+    });
 
     await sendEmail({
       to: email,
       subject: 'Welcome to Mahin AI',
-      html: `<p>Hello ${name}, welcome to Mahin AI.</p>`,
+      html: `<p>Hello ${name}, welcome to Mahin AI. Your account has been created successfully.</p>`,
     });
 
     const accessToken = signAccessToken(user);
     const refreshToken = signRefreshToken(user);
-    user.refreshTokenHash = await bcrypt.hash(refreshToken, 10);
-    await user.save();
+    
+    logger.info(`✅ User registered: ${email}`);
 
     return res.status(201).json({
+      success: true,
       user: { id: user._id, name: user.name, email: user.email, role: user.role },
       accessToken,
       refreshToken,
     });
   } catch (error) {
+    logger.error(`❌ Registration error: ${error.message}`);
     return next(error);
   }
 });
@@ -77,23 +86,34 @@ const resetPasswordSchema = z.object({
 router.post('/login', validate(loginSchema), async (req, res, next) => {
   try {
     const { email, password } = req.validated.body;
-    const user = await User.findOne({ email });
-    if (!user) return res.status(401).json({ message: 'Invalid credentials' });
+    const user = await User.findOne({ email }).select('+password');
+    if (!user) {
+      logger.warn(`❌ Login attempt with non-existent email: ${email}`);
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
+    }
 
-    const valid = await bcrypt.compare(password, user.passwordHash);
-    if (!valid) return res.status(401).json({ message: 'Invalid credentials' });
+    const valid = await bcryptjs.compare(password, user.password);
+    if (!valid) {
+      logger.warn(`❌ Login attempt with wrong password: ${email}`);
+      return res.status(401).json({ success: false, message: 'Invalid credentials' });
+    }
+
+    user.lastLoginAt = new Date();
+    await user.save();
 
     const accessToken = signAccessToken(user);
     const refreshToken = signRefreshToken(user);
-    user.refreshTokenHash = await bcrypt.hash(refreshToken, 10);
-    await user.save();
+
+    logger.info(`✅ User logged in: ${email}`);
 
     return res.json({
+      success: true,
       user: { id: user._id, name: user.name, email: user.email, role: user.role },
       accessToken,
       refreshToken,
     });
   } catch (error) {
+    logger.error(`❌ Login error: ${error.message}`);
     return next(error);
   }
 });
@@ -183,4 +203,4 @@ router.post('/reset-password', validate(resetPasswordSchema), async (req, res, n
   }
 });
 
-module.exports = router;
+export default router;

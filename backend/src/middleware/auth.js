@@ -1,47 +1,53 @@
 import jwt from 'jsonwebtoken';
 import User from '../models/User.js';
-import { sendError } from '../utils/response.js';
 import { logger } from '../utils/logger.js';
 
-export const authenticate = async (req, res, next) => {
+export const requireAuth = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
 
     if (!authHeader?.startsWith('Bearer ')) {
-      return sendError(res, 'No token provided', 401);
+      logger.warn('No authorization token provided');
+      return res.status(401).json({ success: false, message: 'No token provided' });
     }
 
     const token = authHeader.substring(7);
 
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (error) {
+      if (error.name === 'TokenExpiredError') {
+        return res.status(401).json({ success: false, message: 'Token expired' });
+      }
+      throw error;
+    }
+
     const user = await User.findById(decoded.userId);
 
     if (!user) {
-      return sendError(res, 'User not found', 404);
+      logger.warn(`User not found: ${decoded.userId}`);
+      return res.status(404).json({ success: false, message: 'User not found' });
     }
 
     if (!user.isActive) {
-      return sendError(res, 'User account is inactive', 403);
+      logger.warn(`Inactive user attempted access: ${decoded.userId}`);
+      return res.status(403).json({ success: false, message: 'User account is inactive' });
     }
 
-    req.user = user;
-    req.userId = decoded.userId;
+    req.user = { userId: user._id, role: user.role };
     next();
   } catch (error) {
-    if (error.name === 'TokenExpiredError') {
-      return sendError(res, 'Token expired', 401);
-    }
-    if (error.name === 'JsonWebTokenError') {
-      return sendError(res, 'Invalid token', 401);
-    }
-    sendError(res, 'Authentication failed', 401);
+    logger.error(`Authentication error: ${error.message}`);
+    return res.status(401).json({ success: false, message: 'Authentication failed' });
   }
 };
 
-export const authorize = (...roles) => {
+export const requireRole = (...roles) => {
   return (req, res, next) => {
-    if (!roles.includes(req.user.role)) {
-      return sendError(res, 'Insufficient permissions', 403);
+    if (!req.user || !roles.includes(req.user.role)) {
+      logger.warn(`Unauthorized access attempt by user: ${req.user?.userId}`);
+      return res.status(403).json({ success: false, message: 'Insufficient permissions' });
     }
     next();
   };
